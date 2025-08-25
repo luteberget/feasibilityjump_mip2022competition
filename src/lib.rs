@@ -1,6 +1,8 @@
 mod interval;
+
 #[cfg(feature = "gurobi")]
 pub mod lp;
+
 pub mod solver;
 
 pub const UNBOUNDED: f64 = 1.0e5;
