@@ -8,11 +8,9 @@ type Num = f32;
 #[derive(Clone, Copy, Debug)]
 pub struct Interval(pub Num, pub Num);
 
-
 // pub fn eq_tol(a: f32, b: f32) -> bool {
 //     (a - b).abs() < 1e-9
 // }
-
 
 impl Interval {
     pub fn is_empty(&self) -> bool {
@@ -69,7 +67,7 @@ impl Interval {
         // x.max(self.0).min(self.1)
         x.clamp(self.0, self.1)
     }
-    pub fn is_subset_of(&self, other :&Interval) -> bool {
+    pub fn is_subset_of(&self, other: &Interval) -> bool {
         other.0 <= self.0 && self.1 <= other.1
     }
 

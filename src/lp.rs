@@ -1,9 +1,7 @@
 use std::path::Path;
-
 use log::{info, warn};
 
 #[allow(clippy::too_many_arguments)] // In a hurry :)
-
 pub fn repair_continuous_and_save(
     mps_file: &Path,
     original_mps_file: &Path,
@@ -19,7 +17,7 @@ pub fn repair_continuous_and_save(
     let mut env = grb::Env::new("").unwrap();
     env.set(grb::param::Threads, 1).unwrap();
     env.set(grb::param::OutputFlag, 0).unwrap();
-    let mut model = Model::read_from(&mps_file.to_string_lossy(), &env).unwrap();
+    let mut model = Model::from_file_with_env(mps_file, &env).unwrap();
     let vars = model.get_vars().unwrap();
 
     for (var_idx, value) in solution.iter().enumerate() {
@@ -50,7 +48,7 @@ pub fn repair_continuous_and_save(
                     lp_objective,
                     output_file.to_string_lossy()
                 );
-                model.write(&output_file.to_string_lossy()).unwrap();
+                model.write(output_file).unwrap();
             }
         } else {
             // try to insert it into the original model file by variable name just in case
@@ -89,7 +87,7 @@ pub fn repair_continuous_and_save(
                     presolved_solution_path.to_string_lossy()
                 );
                 model
-                    .write(&presolved_solution_path.to_string_lossy())
+                    .write(presolved_solution_path)
                     .unwrap();
             }
         }
@@ -111,7 +109,7 @@ fn try_saving_from_original_model(
 
     info!("loading model");
 
-    let mut original_model = Model::read_from(&original_mps_file.to_string_lossy(), &env)?;
+    let mut original_model = Model::from_file_with_env(original_mps_file, &env)?;
     info!("setting values");
     for (var_idx, value) in solution.iter().enumerate() {
         if let Some(var) = original_model.get_var_by_name(&var_info[var_idx].name)? {
@@ -161,7 +159,7 @@ fn try_saving_from_original_model(
                 objective,
                 output_file.to_string_lossy()
             );
-            original_model.write(&output_file.to_string_lossy())?;
+            original_model.write(output_file)?;
             Ok(Some(objective))
         } else {
             info!("Solution was worse than the previous best.");
