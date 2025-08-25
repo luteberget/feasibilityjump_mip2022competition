@@ -252,11 +252,12 @@ dependencies = [
 
 [[package]]
 name = "grb"
-version = "1.3.0"
+version = "3.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2d94a8d74eb0862f39badb6651f81ddea9026d2e148d4b56528c9381e82c273f"
+checksum = "9834f67c380d91552cfaa9ac309dde5b53c0d783254992ac37e4bcc12cfa2518"
 dependencies = [
  "anyhow",
+ "cfg-if",
  "cstr-enum",
  "csv",
  "fnv",
@@ -281,9 +282,12 @@ dependencies = [
 
 [[package]]
 name = "grb-sys2"
-version = "0.1.1"
+version = "12.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e8817a3a69c46001315c9fd66f5971882137c46587b3c700adf5ac8d07176344"
+checksum = "ae602a07b509e70fed9e88acc4b157087e310a1741ee674fe51e7e4aef06c92a"
+dependencies = [
+ "anyhow",
+]
 
 [[package]]
 name = "heck"
