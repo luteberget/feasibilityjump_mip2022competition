@@ -179,7 +179,7 @@ impl Solver {
                 .max(self.vars[var].lb),
             VarType::Continuous => (curr - self.vars[var].step_size).max(self.vars[var].lb),
         };
-        ((new - curr).abs() > 0.1 * EQ_TOLERANCE).then(|| new)
+        ((new - curr).abs() > 0.1 * EQ_TOLERANCE).then_some(new)
     }
 
     pub fn step_up(&self, var: usize) -> Option<f32> {
@@ -190,7 +190,7 @@ impl Solver {
                 .min(self.vars[var].ub),
             VarType::Continuous => (curr + self.vars[var].step_size).min(self.vars[var].ub),
         };
-        ((new - curr).abs() > 0.1 * EQ_TOLERANCE).then(|| new)
+        ((new - curr).abs() > 0.1 * EQ_TOLERANCE).then_some(new)
     }
 
     pub fn jump_value(&self, var: usize) -> Option<f32> {
