@@ -50,46 +50,7 @@ fn presolve(
     )
 }
 
-#[cfg(not(feature = "gurobi"))]
-fn calculate_objective(mps: &MPSInstance, solution: &[f64]) -> f64 {
-    match mps.objective() {
-        Some((constant, obj)) => {
-            let constant_term = constant.map(|n| n.as_f64()).unwrap_or(0.);
-            -constant_term
-                + obj
-                    .iter()
-                    .map(|c| c.coeff.as_f64() * solution[c.var])
-                    .sum::<f64>()
-        }
-        None => 0.,
-    }
-}
 
-#[cfg(not(feature = "gurobi"))]
-fn save_solution(
-    output_file: &str,
-    mps: &MPSInstance,
-    solution: &[f64],
-    objective: f64,
-) -> std::io::Result<()> {
-    use std::io::Write;
-
-    let mut file = std::fs::File::create(output_file)?;
-
-    // Write objective value
-    writeln!(file, "# Objective value: {}", objective)?;
-    writeln!(file, "# Feasibility Jump Solution")?;
-    writeln!(file)?;
-
-    // Write variable assignments
-    for (var_idx, value) in solution.iter().enumerate() {
-        if var_idx < mps.variables.len() {
-            writeln!(file, "{} {}", mps.variables[var_idx].name, value)?;
-        }
-    }
-
-    Ok(())
-}
 
 #[derive(Debug, StructOpt)]
 #[structopt()]

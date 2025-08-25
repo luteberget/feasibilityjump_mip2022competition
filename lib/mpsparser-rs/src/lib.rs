@@ -20,8 +20,48 @@ impl MPSInstance {
     }
 }
 
-#[derive(Debug)]
-#[derive(Clone, Copy)]
+impl MPSInstance {
+    pub fn calculate_objective(&self, solution: &[f64]) -> f64 {
+        match self.objective() {
+            Some((constant, obj)) => {
+                let constant_term = constant.map(|n| n.as_f64()).unwrap_or(0.);
+                -constant_term
+                    + obj
+                        .iter()
+                        .map(|c| c.coeff.as_f64() * solution[c.var])
+                        .sum::<f64>()
+            }
+            None => 0.,
+        }
+    }
+
+    pub fn save_solution(
+        &self,
+        output_file: &str,
+        solution: &[f64],
+        objective: f64,
+    ) -> std::io::Result<()> {
+        use std::io::Write;
+
+        let mut file = std::fs::File::create(output_file)?;
+
+        // Write objective value
+        writeln!(file, "# Objective value: {}", objective)?;
+        writeln!(file, "# Feasibility Jump Solution")?;
+        writeln!(file)?;
+
+        // Write variable assignments
+        for (var_idx, value) in solution.iter().enumerate() {
+            if var_idx < self.variables.len() {
+                writeln!(file, "{} {}", self.variables[var_idx].name, value)?;
+            }
+        }
+
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
 pub enum RowType {
     None,
     Equal,
@@ -374,7 +414,12 @@ fn parse_number(coeff: &str) -> Result<Number, ParseError> {
 pub const DEFAULT_EQ_TOLERANCE: f64 = 1e-9;
 pub const DEFAULT_INT_TOLERANCE: f64 = 1e-6;
 
-pub fn check_values(mps: &MPSInstance, var_values: &[f64], int_tolerance :f64, eq_tolerance :f64) -> Result<(), &'static str> {
+pub fn check_values(
+    mps: &MPSInstance,
+    var_values: &[f64],
+    int_tolerance: f64,
+    eq_tolerance: f64,
+) -> Result<(), &'static str> {
     //println!("CHECKING {} {}", int_tolerance, eq_tolerance);
     for (var_idx, var) in mps.variables.iter().enumerate() {
         if let VarType::Integer = var.var_type {
