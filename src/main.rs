@@ -1,14 +1,16 @@
+use log::info;
+use lsmip::{UNBOUNDED, USE_EXPONENTIAL_WEIGHT_DECAY};
+use mpsparser::{MPSInstance, Number};
 use std::collections::HashMap;
-#[cfg(feature = "gurobi")]
 use std::{path::PathBuf, sync::RwLock};
+use structopt::StructOpt;
 
 #[cfg(feature = "gurobi")]
-use log::info;
-use lsmip::UNBOUNDED;
-#[cfg(feature = "gurobi")]
-use lsmip::USE_EXPONENTIAL_WEIGHT_DECAY;
-use mpsparser::{MPSInstance, Number};
-use structopt::StructOpt;
+const USE_PRESOLVE: bool = true;
+#[cfg(not(feature = "gurobi"))]
+const USE_PRESOLVE: bool = false;
+
+const NUM_THREADS: usize = 8;
 
 #[cfg(feature = "gurobi")]
 fn presolve(
@@ -50,8 +52,6 @@ fn presolve(
     )
 }
 
-
-
 #[derive(Debug, StructOpt)]
 #[structopt()]
 struct Opts {
@@ -74,7 +74,6 @@ struct Opts {
     temp_path: String,
 }
 
-#[cfg(feature = "gurobi")]
 fn main() {
     pretty_env_logger::env_logger::Builder::from_env(
         pretty_env_logger::env_logger::Env::default().default_filter_or("trace"),
@@ -115,6 +114,8 @@ fn main() {
     let (sol_tx, sol_rx) = std::sync::mpsc::channel::<(bool, Vec<f64>)>();
 
     crossbeam::scope(|s| {
+        // If we have gurobi access, run the presolve on a separate thread.
+        #[cfg(feature = "gurobi")]
         s.spawn(move |_| {
             let mut mps = presolved_borrowed.write().unwrap();
             let (presolved_path, presolved_mps) = presolve(
@@ -126,10 +127,16 @@ fn main() {
             *mps = Some((presolved_path, presolved_mps));
         });
 
-        for thread_idx in [1, 2, 3, 4, 5, 6, 7] {
+        // Reserve 1 thread for presolve.
+        let mut thread_idxs = (1..NUM_THREADS).collect::<Vec<_>>();
+        if NUM_THREADS == 1 || !USE_PRESOLVE {
+            thread_idxs.push(NUM_THREADS);
+        }
+
+        for thread_idx in thread_idxs {
             let seed = thread_idx as u8;
             let relax_continuous = thread_idx % 2 == 0;
-            let use_presolved = (thread_idx / 4) % 2 == 1;
+            let use_presolved = USE_PRESOLVE && (thread_idx / 4) % 2 == 1;
             let decay_factor = if (thread_idx / 2) % 2 == 0 || !USE_EXPONENTIAL_WEIGHT_DECAY {
                 1.0
             } else {
@@ -146,41 +153,10 @@ fn main() {
                     original_mps
                 };
 
-                let objective_coeffs = mps
-                    .objective()
-                    .iter()
-                    .flat_map(|(_, v)| v.iter())
-                    .map(|c| (c.var, c.coeff.as_f64() as f32))
-                    .collect::<HashMap<usize, f32>>();
-
                 let mut solver =
-                    lsmip::solver::Solver::with_seed(thread_idx as usize, seed, decay_factor);
-                for (var_idx, var) in mps.variables.iter().enumerate() {
-                    let lb = var.lb.map(Number::as_f64).unwrap_or(0.) as f32;
-                    let ub = var.ub.map(Number::as_f64).unwrap_or(UNBOUNDED) as f32;
-                    solver.add_var(
-                        var.var_type,
-                        lb,
-                        ub,
-                        objective_coeffs.get(&var_idx).copied().unwrap_or(0.),
-                    );
-                }
+                    lsmip::solver::Solver::with_seed(thread_idx, seed, decay_factor);
 
-                for constraint in mps.constraints.iter() {
-                    if matches!(constraint.rowtype, mpsparser::RowType::None) {
-                        continue;
-                    }
-                    solver.add_constraint(
-                        constraint.rowtype,
-                        constraint.rhs.map(Number::as_f64).unwrap_or(0.) as f32,
-                        &constraint
-                            .cells
-                            .iter()
-                            .map(|c| (c.var, c.coeff.as_f64() as f32))
-                            .collect::<Vec<_>>(),
-                        relax_continuous,
-                    );
-                }
+                translate_mps(&mut solver, mps, relax_continuous);
 
                 solver.solve(|solution| {
                     let solution = solution.iter().map(|v| *v as f64).collect::<Vec<_>>();
@@ -210,6 +186,7 @@ fn main() {
                 path
             };
 
+            #[cfg(feature = "gurobi")]
             lsmip::lp::repair_continuous_and_save(
                 path,
                 original_path,
@@ -220,6 +197,23 @@ fn main() {
                 &solution,
                 &mut best_objective,
             );
+
+            #[cfg(not(feature = "gurobi"))]
+            {
+                let objective = mps.calculate_objective(&solution);
+
+                println!("Thread found solution with objective: {}", objective);
+
+                if objective < best_objective {
+                    best_objective = objective;
+                    println!("New best objective: {}", best_objective);
+                    if let Err(e) = mps.save_solution(&opt.output_file, &solution, best_objective) {
+                        eprintln!("Error saving solution: {}", e);
+                    } else {
+                        println!("Solution saved to: {}", opt.output_file);
+                    }
+                }
+            }
         }
     })
     .unwrap();
@@ -227,114 +221,41 @@ fn main() {
     hprof::profiler().print_timing();
 }
 
-#[cfg(not(feature = "gurobi"))]
-fn main() {
-    pretty_env_logger::env_logger::Builder::from_env(
-        pretty_env_logger::env_logger::Env::default().default_filter_or("trace"),
-    )
-    .init();
+/// Add the variables and constraints from the MPSInstance to the Feasibility Jump solver instance.
+fn translate_mps(solver: &mut lsmip::solver::Solver, mps: &MPSInstance, relax_continuous: bool) {
+    let objective_coeffs = mps
+        .objective()
+        .iter()
+        .flat_map(|(_, v)| v.iter())
+        .map(|c| (c.var, c.coeff.as_f64() as f32))
+        .collect::<HashMap<usize, f32>>();
 
-    let _p = hprof::enter("solver");
-    let opt = Opts::from_args();
-    println!("{:?}", opt);
+    // Add variables
+    for (var_idx, var) in mps.variables.iter().enumerate() {
+        let lb = var.lb.map(Number::as_f64).unwrap_or(0.) as f32;
+        let ub = var.ub.map(Number::as_f64).unwrap_or(UNBOUNDED) as f32;
+        solver.add_var(
+            var.var_type,
+            lb,
+            ub,
+            objective_coeffs.get(&var_idx).copied().unwrap_or(0.),
+        );
+    }
 
-    let path = std::path::Path::new(&opt.input_file);
-    println!("instance:{}", path.file_name().unwrap().to_string_lossy());
-
-    // Load the MPS file directly without presolving
-    let mps_content = std::fs::read(path).unwrap();
-    let mps = mpsparser::parse(mps_content.as_slice()).unwrap();
-
-    let (sol_tx, sol_rx) = std::sync::mpsc::channel::<Vec<f64>>();
-
-    // Run multiple solver threads with different configurations
-    crossbeam::scope(|s| {
-        for thread_idx in [1, 2, 3, 4, 5, 6, 7] {
-            let seed = thread_idx as u8;
-            let relax_continuous = thread_idx % 2 == 0;
-            let decay_factor = 1.0; // Simplified: no exponential decay
-
-            let sol_tx = sol_tx.clone();
-            let mps = &mps; // All threads use the original MPS
-
-            s.spawn(move |_| {
-                let objective_coeffs = mps
-                    .objective()
-                    .iter()
-                    .flat_map(|(_, v)| v.iter())
-                    .map(|c| (c.var, c.coeff.as_f64() as f32))
-                    .collect::<HashMap<usize, f32>>();
-
-                let mut solver =
-                    lsmip::solver::Solver::with_seed(thread_idx as usize, seed, decay_factor);
-
-                // Add variables
-                for (var_idx, var) in mps.variables.iter().enumerate() {
-                    let lb = var.lb.map(Number::as_f64).unwrap_or(0.) as f32;
-                    let ub = var.ub.map(Number::as_f64).unwrap_or(UNBOUNDED) as f32;
-                    solver.add_var(
-                        var.var_type,
-                        lb,
-                        ub,
-                        objective_coeffs.get(&var_idx).copied().unwrap_or(0.),
-                    );
-                }
-
-                // Add constraints
-                for constraint in mps.constraints.iter() {
-                    if matches!(constraint.rowtype, mpsparser::RowType::None) {
-                        continue;
-                    }
-                    solver.add_constraint(
-                        constraint.rowtype,
-                        constraint.rhs.map(Number::as_f64).unwrap_or(0.) as f32,
-                        &constraint
-                            .cells
-                            .iter()
-                            .map(|c| (c.var, c.coeff.as_f64() as f32))
-                            .collect::<Vec<_>>(),
-                        relax_continuous,
-                    );
-                }
-
-                solver.solve(|solution| {
-                    let solution = solution.iter().map(|v| *v as f64).collect::<Vec<_>>();
-                    sol_tx.send(solution).unwrap();
-                });
-            });
+    // Add constraints
+    for constraint in mps.constraints.iter() {
+        if matches!(constraint.rowtype, mpsparser::RowType::None) {
+            continue;
         }
-
-        drop(sol_tx);
-
-        let mut best_objective = f64::INFINITY;
-        let mut best_solution: Option<Vec<f64>> = None;
-
-        // Process solutions from all threads
-        for solution in sol_rx.into_iter() {
-            let objective = calculate_objective(&mps, &solution);
-
-            println!("Thread found solution with objective: {}", objective);
-
-            if objective < best_objective {
-                best_objective = objective;
-                best_solution = Some(solution);
-                println!("New best objective: {}", best_objective);
-            }
-        }
-
-        // Save the best solution found
-        if let Some(solution) = best_solution {
-            println!("Final best objective: {}", best_objective);
-            if let Err(e) = save_solution(&opt.output_file, &mps, &solution, best_objective) {
-                eprintln!("Error saving solution: {}", e);
-            } else {
-                println!("Solution saved to: {}", opt.output_file);
-            }
-        } else {
-            println!("No feasible solution found");
-        }
-    })
-    .unwrap();
-
-    hprof::profiler().print_timing();
+        solver.add_constraint(
+            constraint.rowtype,
+            constraint.rhs.map(Number::as_f64).unwrap_or(0.) as f32,
+            &constraint
+                .cells
+                .iter()
+                .map(|c| (c.var, c.coeff.as_f64() as f32))
+                .collect::<Vec<_>>(),
+            relax_continuous,
+        );
+    }
 }
